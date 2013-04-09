@@ -1,0 +1,235 @@
+<?php
+//@todo: should $number be normalized before calling this function?
+
+/**
+ * Implements hook_voip_number_alter()
+ */
+function envaya_converter_voip_number_alter(&$number, $op, $gateway_number = NULL) {
+  watchdog('envaya_converter' ,"number $number op $op gateway_number $gateway_number");
+
+  if($op == 'e.164') {
+    $number = _envaya_converter_get_e164($number, $gateway_number);
+  }
+  else if($op == 'local') {
+  //@todo:
+    $original_number = db_query("SELECT original_number FROM {voipnumber_routing} WHERE normalized_number=:number",
+      array(':number' => $number))
+    ->fetchField();
+    if($original_number) {
+      $number = $original_number;
+    }
+  }
+}
+
+/**
+ * Implements hook_cron()
+ */
+function envaya_converter_cron() {
+  //Delete numbers older than a day from routing table
+  $one_day = (time()+86401) - 86400;
+  db_delete('voipnumber_routing')
+    ->condition('created', $one_day, '<')
+    ->execute();
+}
+
+/*Add default country code to local numbers*/
+function _envaya_converter_get_e164($number, $gateway_number) {
+  if(envaya_converter_is_local($number)) {
+    $settings = variable_get('sms_envaya_settings', array('wrapper' => array('field' => '')));
+    $envaya_settings = $settings['wrapper']['field'];
+
+    foreach($envaya_settings as $envaya_setting) {
+      if(!empty($envaya_setting['phone']) && $envaya_setting['phone'] == $gateway_number && !empty($envaya_setting['country_code'])) {
+        $original_number = $number;
+        if($envaya_setting['leading_zero']) {
+          //remove leading zero if this option is enabled
+          //Remove 00 from begining of number
+          $pattern = '/^0/';
+          $number = preg_replace($pattern, '', $number);
+        }
+        $number = $envaya_setting['country_code'] . $number;
+        //watchdog('debug', "Converted to $number");
+        //@todo: save number in routing table
+        $data = array(
+          'original_number' => $original_number,
+          'normalized_number' => $number,
+          'created' => time(),
+        );
+        drupal_write_record('voipnumber_routing', $data);
+        break;
+      }
+    }
+  }
+  else {
+    //watchdog('debug', "Number $number already e.164");
+  }
+  return $number;
+}
+
+function envaya_converter_is_local($number) {
+  if(strlen($number) < 11) {
+    //This is local number
+    return TRUE;
+  }
+  else {
+    return FALSE;
+  }
+}
+
+function envaya_converter_form_sms_admin_gateway_form_alter(&$form, &$form_state, $form_id) {
+  $settings = variable_get('sms_envaya_settings', array('wrapper' => array('field' => '')));
+  $envaya_settings = $settings['wrapper']['field'];
+
+  $envaya_phones = array();
+  foreach($envaya_settings as $envaya_setting) {
+    if(!empty($envaya_setting['phone'])) {
+      $envaya_phones[] = $envaya_setting;
+    }
+  }
+
+  unset($form['passwords']);
+
+  $form['wrapper']['description'] = array(
+    '#type' => 'markup',
+    '#markup' => '<div><b>Phone number: </b><span>For each device running the
+     EnvayaSMS app, enter the device phone number formatted
+     with a \'+\' and country code, e.g. +16175551212 for U.S. numbers,
+     +551136667790 for Brazil, etc. according to the <a target="_blank" href="http://en.wikipedia.org/wiki/E.164">E.164</a> international number standard.
+    </span></div>
+    <div><b>Password: </b><span>Password associated with the device number within the EnvayaSMS app.</span></div>
+    <div><b>Default country code: </b><span>Default country code to be appended
+    to local numbers received on the incoming messages and calls.
+    Examples: +1 for U.S. numbers, +55 for Brazil, etc. according to the <a target="_blank" href="http://en.wikipedia.org/wiki/E.164">E.164</a>
+    international number standard. Please leave this field blank to keep original numbers untouched.
+    </span></div>
+    <div><b>Strip leading zero: </b><span>Some countries include a leading zero
+    in front of the local number. This option will remove that zero and include
+    the default country code, if any available. </span></div>',
+  );
+
+  // Because we have many fields with the same values, we have to set
+  // #tree to be able to access them.
+  $form['#tree'] = TRUE;
+
+  // Build the fieldset with the proper number of textfields.
+  // $form_state['envaya_converter_ahah_rows_count'] to determine the number of rows to build.
+  if (empty($form_state['envaya_converter_ahah_rows_count'])) {
+    $num_of_phones = count($envaya_phones);
+    $form_state['envaya_converter_ahah_rows_count'] = ($num_of_phones > 3) ? $num_of_phones : 3;
+  }
+
+  //Build form table
+  for ($i = 0; $i < $form_state['envaya_converter_ahah_rows_count']; $i++) {
+    if($i == 0) {
+      $prefix = '<table>';
+    }
+    else {
+      $prefix = '';
+    }
+
+    if (($i+1) == $form_state['envaya_converter_ahah_rows_count']) {
+      $suffix = '</table>';
+    }
+    else {
+      $suffix = '';
+    }
+    $form['wrapper']['field']['field_'.$i]['phone'] = array(
+      '#prefix' => $prefix.'<tr><td>',
+      '#title' => t('Phone number'),
+      '#type' => 'textfield',
+      '#size' => 20,
+      '#default_value' => (isset($envaya_phones[$i]['phone'])) ? $envaya_phones[$i]['phone'] : '',
+      '#suffix' => '</td>',
+    );
+
+    $form['wrapper']['field']['field_'.$i]['password'] = array(
+      '#prefix' => '<td>',
+      '#title' => t('Password'),
+      '#type' => 'textfield',
+      '#default_value' => (isset($envaya_phones[$i]['password'])) ? $envaya_phones[$i]['password'] : '',
+      '#suffix' => '</td>',
+    );
+
+    $form['wrapper']['field']['field_'.$i]['country_code'] = array(
+      '#prefix' => '<td>',
+      '#title' => t('Default country code'),
+      '#type' => 'textfield',
+      '#default_value' => (isset($envaya_phones[$i]['country_code'])) ? $envaya_phones[$i]['country_code'] : '',
+      '#size' => 5,
+      '#suffix' =>  '</td>',
+    );
+
+    $form['wrapper']['field']['field_'.$i]['leading_zero'] = array(
+      '#prefix' => '<td><b>Strip leading zero</b>',
+      '#title' => '',
+      '#type' => 'checkbox',
+      '#default_value' => (isset($envaya_phones[$i]['leading_zero'])) ? $envaya_phones[$i]['leading_zero'] : '',
+      '#suffix' => $suffix . '</td></tr>',
+    );
+  }
+
+  $form['wrapper']['field']['#prefix'] = '<div id="table-page-fieldset-wrapper">';
+  $form['wrapper']['field']['#suffix'] = '</div>';
+
+  $form['wrapper']['sms_envaya_ahah_page'] = array(
+    '#type' => 'submit',
+    '#value' => t('Add More'),
+    '#submit' => array('envaya_converter_ahah_add_more'),
+    '#ajax' => array(
+      'callback' => 'envaya_converter_ahah_add_more_callback',
+      'wrapper' => 'table-page-fieldset-wrapper',
+    ),
+  );
+  $form['submit']['#weight'] = 50;
+  $form['submit']['#prefix'] = '<br>';
+
+  $form['#validate'][] = 'envaya_converter_form_sms_admin_gateway_validate';
+
+  return $form;
+}
+
+function envaya_converter_form_sms_admin_gateway_validate($form, &$form_state) {
+  $phone_numbers = array();
+  $rows = $form_state['values']['wrapper']['field'];
+  $i=0;
+  $form_state['values']['passwords'] = '';
+  foreach($rows as $id => $row) {
+    if(($row['phone'] && !$row['password']) || (!$row['phone'] && $row['password'])) {
+      //If phone is entered without password or viceversa throw error
+      form_set_error('wrapper][field][field_'.$i, t('You must enter both phone number and password.'));
+    }
+
+    //Build array of phone numbers to check if one is repeated more than once
+    if($row['phone']) {
+      if(isset($phone_numbers[$row['phone']])) {
+        form_set_error('wrapper][field]['.$id.'][phone', t('Phone number must be unique.'));
+      }
+      $phone_numbers[$row['phone']] = TRUE;
+    }
+
+    if($row['phone'] && $row['password']) {
+      //Save numbers in sms_envaya format
+      $form_state['values']['passwords'] .= $row['phone'] .' '.$row['password']."\r\n";
+    }
+    $i++;
+  }
+}
+
+/**
+ * Submit handler for the "add-one-more" button.
+ *
+ * Increments the max counter and causes a rebuild.
+ */
+function envaya_converter_ahah_add_more($form, &$form_state) {
+  $form_state['envaya_converter_ahah_rows_count']++;
+  $form_state['rebuild'] = TRUE;
+}
+
+/**
+ * Callback for both ajax-enabled buttons.
+ *
+ * Returns the anon page textfields
+ */
+function envaya_converter_ahah_add_more_callback($form, $form_state) {
+  return $form['wrapper']['field'];
+}

@@ -1,0 +1,52 @@
+<?php
+/**
+ * @file
+ * Install, update and uninstall functions for the voipcall module.
+ *
+ */
+/**
+ * Implements hook_install().
+ */
+function envaya_converter_install() {
+
+}
+/**
+ * Implements hook_uninstall().
+ */
+function envaya_converter_uninstall() {
+
+}
+
+/**
+ * Implements hook_schema().
+ */
+function envaya_converter_schema() {
+  /**
+   * ontrack sites table
+   */
+  $schema['voipnumber_routing'] = array(
+    'fields' => array(
+      'id' => array(
+        'description' => 'SID',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'original_number' => array(
+        'type' => 'varchar',
+        'length' => 255,
+      ),
+     'normalized_number' => array(
+        'type' => 'varchar',
+        'length' => 255,
+      ),
+     'created' => array(
+        'type' => 'int',
+        'default' => 0,
+      ),
+    ),
+    'primary key' => array('id'),
+  );
+
+  return $schema;
+}

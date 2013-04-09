@@ -1,0 +1,7 @@
+; $Id$
+core = 7.x
+description = "Custom module which adds new form and routing mechanism for SMS Envaya"
+name = "Envaya converter"
+package = SMS Framework
+dependencies[] = "voipcall"
+
